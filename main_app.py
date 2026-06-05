@@ -7,17 +7,15 @@ import folium
 import requests
 
 app = Flask(__name__)
-UPLOAD_FOLDER = 'uploads'
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
-# ==========================================
-# VRP MOTORU (Web İçin Modifiye Edilmiş Hali)
-# ==========================================
+# ========================================================
+# 1. ALGORİTMA MOTORU (Hafızadan Okuma Destekli Profesyonel Sürüm)
+# ========================================================
 def vrp_motoru_calistir(excel_yolu):
     random.seed(42)
 
+    # Excel'den okuma (Dosyayı diske kaydetmeden doğrudan hafızadan okur)
     df_merkez = pd.read_excel(excel_yolu, sheet_name="Merkez")
     df_suruculer = pd.read_excel(excel_yolu, sheet_name="Suruculer")
     df_musteriler = pd.read_excel(excel_yolu, sheet_name="Musteriler")
@@ -47,13 +45,15 @@ def vrp_motoru_calistir(excel_yolu):
         R = 6371.0
         lat1, lon1 = math.radians(k1["lat"]), math.radians(k1["lon"])
         lat2, lon2 = math.radians(k2["lat"]), math.radians(k2["lon"])
-        return round(R * 2 * math.atan2(math.sqrt(
-            math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2),
-                                        math.sqrt(1 - (math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(
-                                            lat2) * math.sin((lon2 - lon1) / 2) ** 2))), 2)
+        dlat, dlon = lat2 - lat1, lon2 - lon1
+        a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+        return round(R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)), 2)
 
     def hızlı_rota_maliyeti(rota_listesi):
         return sum(haversine_mesafe(rota_listesi[i], rota_listesi[i + 1]) for i in range(len(rota_listesi) - 1))
+
+    def hızlı_filo_maliyeti(rotalar_dict):
+        return sum(hızlı_rota_maliyeti(r) for r in rotalar_dict.values())
 
     def osrm_geometri_ve_mesafe(rota_id_listesi):
         koordinatlar = []
@@ -75,7 +75,7 @@ def vrp_motoru_calistir(excel_yolu):
             pass
         return None, hızlı_rota_maliyeti(rota_id_listesi)
 
-    # --- Capacitated K-Means ---
+    # --- Capacitated K-Means Adımı ---
     kalan_kapasiteler = {d_id: suruculer[d_id]["kapasite"] for d_id in suruculer.keys()}
     küme_merkezleri = {d_id: {"lat": suruculer[d_id]["lat"], "lon": suruculer[d_id]["lon"]} for d_id in
                        suruculer.keys()}
@@ -120,7 +120,7 @@ def vrp_motoru_calistir(excel_yolu):
         sirali_rota.append("MERKEZ")
         baslangic_rotalar[d_id] = sirali_rota
 
-    # --- ALNS + 2-Opt ---
+    # --- ALNS Aşaması ---
     en_iyi_alns_rotasi = {k: list(v) for k, v in baslangic_rotalar.items()}
     for _ in range(100):
         test_rotalar = {k: list(v) for k, v in en_iyi_alns_rotasi.items()}
@@ -141,6 +141,7 @@ def vrp_motoru_calistir(excel_yolu):
         if hızlı_filo_maliyeti(test_rotalar) < hızlı_filo_maliyeti(en_iyi_alns_rotasi):
             en_iyi_alns_rotasi = {k: list(v) for k, v in test_rotalar.items()}
 
+    # --- 2-Opt Cilası ---
     def nihai_iki_opt(rota):
         en_iyi = list(rota)
         iyilesme = True
@@ -156,11 +157,11 @@ def vrp_motoru_calistir(excel_yolu):
 
     nihai_optimize_rotalar = {d_id: nihai_iki_opt(rota) for d_id, rota in en_iyi_alns_rotasi.items()}
 
-    # --- Web İçin Veri Paketleme ---
+    # --- Verileri Dashboard İçin Hazırlama ---
     arac_detaylari = []
     eski_toplam_osrm = yeni_toplam_osrm = 0
 
-    # Folium Haritası Oluşturma
+    # Folium İnteraktif Harita Kurulumu
     harita = folium.Map(location=[merkez["lat"], merkez["lon"]], zoom_start=11, tiles="OpenStreetMap")
     folium.Marker([merkez["lat"], merkez["lon"]], popup=merkez["ad"],
                   icon=folium.Icon(color="red", icon="star", prefix="fa")).add_to(harita)
@@ -185,7 +186,7 @@ def vrp_motoru_calistir(excel_yolu):
             "musteriler": m_listesi
         })
 
-        # Haritaya Katman Ekleme
+        # Harita Katmanlarını Çizdirme
         renk = suruculer[d_id]["renk"]
         katman = folium.FeatureGroup(name=f"🚗 {suruculer[d_id]['ad']}")
         folium.Marker([suruculer[d_id]["lat"], suruculer[d_id]["lon"]], popup=f"{suruculer[d_id]['ad']} Başlangıç",
@@ -214,20 +215,25 @@ def vrp_motoru_calistir(excel_yolu):
     return arac_detaylari, ozet, harita_html
 
 
+# ========================================================
+# 2. FLASK WEB CONTROLLER (Yönlendirme Katmanı)
+# ========================================================
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
-        if 'file' not in request.files: return redirect(request.url)
+        if 'file' not in request.files:
+            return redirect(request.url)
         file = request.files['file']
-        if file.filename == '': return redirect(request.url)
+        if file.filename == '':
+            return redirect(request.url)
 
         if file:
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
-            file.save(filepath)
-
-            # Algoritmayı çalıştır ve sonuçları al
-            araclar, ozet, harita_html = vrp_motoru_calistir(filepath)
-            return render_template('dashboard.html', araclar=araclar, ozet=ozet, harita_html=harita_html)
+            try:
+                # Dosyayı diske kaydetmeden doğrudan bellek üzerinden besliyoruz
+                araclar, ozet, harita_html = vrp_motoru_calistir(file)
+                return render_template('dashboard.html', araclar=araclar, ozet=ozet, harita_html=harita_html)
+            except Exception as e:
+                return f"Algoritma Çalışırken Sunucu Hatası Oluştu: {str(e)}", 500
 
     return render_template('index.html')
 
