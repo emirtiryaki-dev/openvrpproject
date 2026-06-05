@@ -10,12 +10,12 @@ app = Flask(__name__)
 
 
 # ========================================================
-# 1. ALGORİTMA MOTORU (Hafızadan Okuma Destekli Profesyonel Sürüm)
+# 1. ALGORİTMA MOTORU (HTTPS Destekli ve Kararlı Sürüm)
 # ========================================================
 def vrp_motoru_calistir(excel_yolu):
     random.seed(42)
 
-    # Excel'den okuma (Dosyayı diske kaydetmeden doğrudan hafızadan okur)
+    # Excel'den okuma (Hafıza tabanlı)
     df_merkez = pd.read_excel(excel_yolu, sheet_name="Merkez")
     df_suruculer = pd.read_excel(excel_yolu, sheet_name="Suruculer")
     df_musteriler = pd.read_excel(excel_yolu, sheet_name="Musteriler")
@@ -65,7 +65,9 @@ def vrp_motoru_calistir(excel_yolu):
             else:
                 koordinatlar.append(musteriler[n_id])
         koordinat_stringi = ";".join([f"{n['lon']},{n['lat']}" for n in koordinatlar])
-        url = f"http://router.project-osrm.org/route/v1/driving/{koordinat_stringi}?overview=full&geometries=geojson"
+
+        # HARİTANIN GELMESİNİ SAĞLAYAN GÜVENLİ HTTPS BAĞLANTISI:
+        url = f"https://router.project-osrm.org/route/v1/driving/{koordinat_stringi}?overview=full&geometries=geojson"
         try:
             res = requests.get(url).json()
             if res["code"] == "Ok":
@@ -216,7 +218,7 @@ def vrp_motoru_calistir(excel_yolu):
 
 
 # ========================================================
-# 2. FLASK WEB CONTROLLER (Yönlendirme Katmanı)
+# 2. FLASK WEB CONTROLLER
 # ========================================================
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -229,7 +231,6 @@ def index():
 
         if file:
             try:
-                # Dosyayı diske kaydetmeden doğrudan bellek üzerinden besliyoruz
                 araclar, ozet, harita_html = vrp_motoru_calistir(file)
                 return render_template('dashboard.html', araclar=araclar, ozet=ozet, harita_html=harita_html)
             except Exception as e:
