@@ -8,7 +8,6 @@ import requests
 
 app = Flask(__name__)
 
-
 # ========================================================
 # 1. ALGORİTMA MOTORU (HTTPS Destekli ve Kararlı Sürüm)
 # ========================================================
@@ -40,7 +39,6 @@ def vrp_motoru_calistir(excel_yolu):
         def get_koor(id_str):
             if id_str == "MERKEZ": return merkez
             return suruculer[id_str] if id_str.startswith("D") else musteriler[id_str]
-
         k1, k2 = get_koor(n1_id), get_koor(n2_id)
         R = 6371.0
         lat1, lon1 = math.radians(k1["lat"]), math.radians(k1["lon"])
@@ -58,51 +56,44 @@ def vrp_motoru_calistir(excel_yolu):
     def osrm_geometri_ve_mesafe(rota_id_listesi):
         koordinatlar = []
         for n_id in rota_id_listesi:
-            if n_id == "MERKEZ":
-                koordinatlar.append(merkez)
-            elif n_id.startswith("D"):
-                koordinatlar.append(suruculer[n_id])
-            else:
-                koordinatlar.append(musteriler[n_id])
+            if n_id == "MERKEZ": koordinatlar.append(merkez)
+            elif n_id.startswith("D"): koordinatlar.append(suruculer[n_id])
+            else: koordinatlar.append(musteriler[n_id])
         koordinat_stringi = ";".join([f"{n['lon']},{n['lat']}" for n in koordinatlar])
-
+        
         # HARİTANIN GELMESİNİ SAĞLAYAN GÜVENLİ HTTPS BAĞLANTISI:
         url = f"https://router.project-osrm.org/route/v1/driving/{koordinat_stringi}?overview=full&geometries=geojson"
         try:
             res = requests.get(url).json()
             if res["code"] == "Ok":
-                return [[c[1], c[0]] for c in res["routes"][0]["geometry"]["coordinates"]], round(
-                    res["routes"][0]["distance"] / 1000, 2)
-        except:
-            pass
+                return [[c[1], c[0]] for c in res["routes"][0]["geometry"]["coordinates"]], round(res["routes"][0]["distance"] / 1000, 2)
+        except: pass
         return None, hızlı_rota_maliyeti(rota_id_listesi)
 
     # --- Capacitated K-Means Adımı ---
     kalan_kapasiteler = {d_id: suruculer[d_id]["kapasite"] for d_id in suruculer.keys()}
-    küme_merkezleri = {d_id: {"lat": suruculer[d_id]["lat"], "lon": suruculer[d_id]["lon"]} for d_id in
-                       suruculer.keys()}
+    küme_merkezleri = {d_id: {"lat": suruculer[d_id]["lat"], "lon": suruculer[d_id]["lon"]} for d_id in suruculer.keys()}
     musteri_kumeleri = {}
 
     for _ in range(10):
         kalan_kapasiteler = {d_id: suruculer[d_id]["kapasite"] for d_id in suruculer.keys()}
         musteri_kumeleri = {d_id: [] for d_id in suruculer.keys()}
         atanmamis_musteriler = list(musteriler.keys())
-
+        
         while atanmamis_musteriler:
             en_yakin_m, en_yakin_d, en_kisa_mesafe = None, None, float('inf')
             for m_id in atanmamis_musteriler:
                 m_lat, m_lon = musteriler[m_id]["lat"], musteriler[m_id]["lon"]
                 for d_id, merkez_koor in küme_merkezleri.items():
                     if kalan_kapasiteler[d_id] <= 0: continue
-                    mesafe = math.sqrt((m_lat - merkez_koor["lat"]) ** 2 + (m_lon - merkez_koor["lon"]) ** 2)
+                    mesafe = math.sqrt((m_lat - merkez_koor["lat"])**2 + (m_lon - merkez_koor["lon"])**2)
                     if mesafe < en_kisa_mesafe:
                         en_kisa_mesafe, en_yakin_m, en_yakin_d = mesafe, m_id, d_id
             if en_yakin_m:
                 musteri_kumeleri[en_yakin_d].append(en_yakin_m)
                 kalan_kapasiteler[en_yakin_d] -= 1
                 atanmamis_musteriler.remove(en_yakin_m)
-            else:
-                break
+            else: break
 
         for d_id, m_listesi in musteri_kumeleri.items():
             if m_listesi:
@@ -162,21 +153,20 @@ def vrp_motoru_calistir(excel_yolu):
     # --- Verileri Dashboard İçin Hazırlama ---
     arac_detaylari = []
     eski_toplam_osrm = yeni_toplam_osrm = 0
-
+    
     # Folium İnteraktif Harita Kurulumu
     harita = folium.Map(location=[merkez["lat"], merkez["lon"]], zoom_start=11, tiles="OpenStreetMap")
-    folium.Marker([merkez["lat"], merkez["lon"]], popup=merkez["ad"],
-                  icon=folium.Icon(color="red", icon="star", prefix="fa")).add_to(harita)
+    folium.Marker([merkez["lat"], merkez["lon"]], popup=merkez["ad"], icon=folium.Icon(color="red", icon="star", prefix="fa")).add_to(harita)
 
     for d_id in baslangic_rotalar.keys():
         _, km_eski = osrm_geometri_ve_mesafe(baslangic_rotalar[d_id])
         geometri, km_yeni = osrm_geometri_ve_mesafe(nihai_optimize_rotalar[d_id])
         eski_toplam_osrm += km_eski
         yeni_toplam_osrm += km_yeni
-
+        
         m_listesi = nihai_optimize_rotalar[d_id][1:-1]
         kapasite = suruculer[d_id]["kapasite"]
-
+        
         arac_detaylari.append({
             "id": d_id,
             "sofor": suruculer[d_id]["ad"],
@@ -191,16 +181,13 @@ def vrp_motoru_calistir(excel_yolu):
         # Harita Katmanlarını Çizdirme
         renk = suruculer[d_id]["renk"]
         katman = folium.FeatureGroup(name=f"🚗 {suruculer[d_id]['ad']}")
-        folium.Marker([suruculer[d_id]["lat"], suruculer[d_id]["lon"]], popup=f"{suruculer[d_id]['ad']} Başlangıç",
-                      icon=folium.Icon(color=renk, icon="home", prefix="fa")).add_to(katman)
-
+        folium.Marker([suruculer[d_id]["lat"], suruculer[d_id]["lon"]], popup=f"{suruculer[d_id]['ad']} Başlangıç", icon=folium.Icon(color=renk, icon="home", prefix="fa")).add_to(katman)
+        
         for idx, m_id in enumerate(m_listesi, start=1):
-            folium.Marker([musteriler[m_id]["lat"], musteriler[m_id]["lon"]], popup=f"<b>{m_id}</b><br>Sıra: {idx}",
-                          icon=folium.Icon(color=renk, icon="user", prefix="fa")).add_to(katman)
-
+            folium.Marker([musteriler[m_id]["lat"], musteriler[m_id]["lon"]], popup=f"<b>{m_id}</b><br>Sıra: {idx}", icon=folium.Icon(color=renk, icon="user", prefix="fa")).add_to(katman)
+        
         if geometri:
-            folium.GeoJson(data={"type": "Feature",
-                                 "geometry": {"type": "LineString", "coordinates": [[c[1], c[0]] for c in geometri]}},
+            folium.GeoJson(data={"type": "Feature", "geometry": {"type": "LineString", "coordinates": [[c[1], c[0]] for c in geometri]}},
                            style_function=lambda x, r=renk: {'color': r, 'weight': 5, 'opacity': 0.8}).add_to(katman)
         katman.add_to(harita)
 
@@ -223,21 +210,20 @@ def vrp_motoru_calistir(excel_yolu):
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
-        if 'file' not in request.files:
+        if 'file' not in request.files: 
             return redirect(request.url)
         file = request.files['file']
-        if file.filename == '':
+        if file.filename == '': 
             return redirect(request.url)
-
+        
         if file:
             try:
                 araclar, ozet, harita_html = vrp_motoru_calistir(file)
                 return render_template('dashboard.html', araclar=araclar, ozet=ozet, harita_html=harita_html)
             except Exception as e:
                 return f"Algoritma Çalışırken Sunucu Hatası Oluştu: {str(e)}", 500
-
+            
     return render_template('index.html')
-
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
