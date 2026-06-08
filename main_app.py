@@ -5,13 +5,12 @@ import math
 import pandas as pd
 import folium
 import requests
-import time
 
 app = Flask(__name__)
 
 
 # ========================================================
-# 1. EN GELİŞMİŞ ALGORİTMA MOTORU (Yedekli ve Güvenli Sunucu Altyapısı)
+# 1. KARARLI ALGORİTMA MOTORU (Gerçek Yol Matrisi & Karayolu Çizimi)
 # ========================================================
 def vrp_motoru_calistir(excel_yolu):
     random.seed(42)
@@ -46,31 +45,16 @@ def vrp_motoru_calistir(excel_yolu):
     # --- OSRM ÜZERİNDEN GERÇEK YOL MESAFE MATRİSİNİ OLUŞTURMA ---
     mesafe_matrisi = {id1: {id2: 0.0 for id2 in nokta_idleri} for id1 in nokta_idleri}
     koordinat_stringi = ";".join([f"{tum_noktalar[nid]['lon']},{tum_noktalar[nid]['lat']}" for nid in nokta_idleri])
+    url = f"https://router.project-osrm.org/table/v1/driving/{koordinat_stringi}?annotations=distance"
 
-    # Bloklanma riskine karşı yedekli OSRM sunucu listesi
-    sunucu_havuzu = [
-        "https://router.project-osrm.org",
-        "https://osrm.fretboard.io",
-        "https://routing.openstreetmap.de/routed-car"
-    ]
-
-    matris_yuklendi = False
-    for api_base in sunucu_havuzu:
-        if matris_yuklendi: break
-        url = f"{api_base}/table/v1/driving/{koordinat_stringi}?annotations=distance"
-        try:
-            res = requests.get(url, timeout=5).json()
-            if res.get("code") == "Ok":
-                matris_listesi = res["distances"]
-                for i, id1 in enumerate(nokta_idleri):
-                    for j, id2 in enumerate(nokta_idleri):
-                        mesafe_matrisi[id1][id2] = round(matris_listesi[i][j] / 1000, 2)
-                matris_yuklendi = True
-        except:
-            continue
-
-    if not matris_yuklendi:
-        # Sunucuların tamamı çökerse Haversine (Kuş uçuşu emniyet kilidi) devreye girer
+    try:
+        res = requests.get(url, timeout=5).json()
+        if res["code"] == "Ok":
+            matris_listesi = res["distances"]
+            for i, id1 in enumerate(nokta_idleri):
+                for j, id2 in enumerate(nokta_idleri):
+                    mesafe_matrisi[id1][id2] = round(matris_listesi[i][j] / 1000, 2)
+    except:
         def haversine(k1, k2):
             R = 6371.0
             lat1, lon1 = math.radians(k1["lat"]), math.radians(k1["lon"])
@@ -82,69 +66,24 @@ def vrp_motoru_calistir(excel_yolu):
             for id2 in nokta_idleri:
                 mesafe_matrisi[id1][id2] = haversine(tum_noktalar[id1], tum_noktalar[id2])
 
-    # Rota ve Filo Maliyetlerini Gerçek Matris Üzerinden Hesaplayan Fonksiyonlar
     def rota_gercek_maliyeti(rota_listesi):
         return sum(mesafe_matrisi[rota_listesi[i]][rota_listesi[i + 1]] for i in range(len(rota_listesi) - 1))
 
     def filo_gercek_maliyeti(rotalar_dict):
         return sum(rota_gercek_maliyeti(r) for r in rotalar_dict.values())
 
-    # Haritaya yol çizgisini ve detaylı Türkçe güzergah adımlarını getiren EN GÜVENLİ fonksiyon
-    def osrm_geometri_ve_tarif_getir(rota_id_listesi):
+    # Haritaya sadece kıvrımlı gerçek karayolu geometrisini çeken güvenli fonksiyon
+    def osrm_geometri_getir(rota_id_listesi):
         koordinatlar = [tum_noktalar[nid] for nid in rota_id_listesi]
         k_str = ";".join([f"{n['lon']},{n['lat']}" for n in koordinatlar])
-
-        # Sırasıyla her sunucuyu dener, bloklanma durumunu tamamen aşar
-        for api_base in sunucu_havuzu:
-            url = f"{api_base}/route/v1/driving/{k_str}?overview=full&geometries=geojson&steps=true&language=tr"
-            try:
-                res = requests.get(url, timeout=4).json()
-                if res.get("code") == "Ok":
-                    geometri = [[c[1], c[0]] for c in res["routes"][0]["geometry"]["coordinates"]]
-                    yol_tarifi_adimlari = []
-                    legs = res["routes"][0]["legs"]
-                    for leg in legs:
-                        for step in leg["steps"]:
-                            manevra = step.get("maneuver", {}).get("instruction")
-                            if manevra:
-                                yol_tarifi_adimlari.append(manevra)
-                    return geometri, yol_tarifi_adimlari
-            except:
-                continue
-
-        # Eğer sunuculardan toplu yanıt alınamazsa ikişerli parçalı sorgu moduna geçer (Hata önleyici)
-        toplam_geometri = []
-        toplam_tarif = []
-        for i in range(len(koordinatlar) - 1):
-            n1 = koordinatlar[i]
-            n2 = koordinatlar[i + 1]
-            basarili_parca = False
-            for api_base in sunucu_havuzu:
-                if basarili_parca: break
-                parca_url = f"{api_base}/route/v1/driving/{n1['lon']},{n1['lat']};{n2['lon']},{n2['lat']}?overview=full&geometries=geojson&steps=true&language=tr"
-                try:
-                    res = requests.get(parca_url, timeout=2).json()
-                    if res.get("code") == "Ok":
-                        coords = [[c[1], c[0]] for c in res["routes"][0]["geometry"]["coordinates"]]
-                        toplam_geometri.extend(coords)
-                        legs = res["routes"][0]["legs"]
-                        for leg in legs:
-                            for step in leg["steps"]:
-                                manevra = step.get("maneuver", {}).get("instruction")
-                                if manevra:
-                                    toplam_tarif.append(manevra)
-                        basarili_parca = True
-                except:
-                    continue
-
-        if toplam_geometri:
-            return toplam_geometri, toplam_tarif
-
-        # Harita sunucuları tamamen yanıtsız kalırsa, uygulamanın çökmemesi için düz çizgi çizer
-        duz_geometri = [[n["lat"], n["lon"]] for n in koordinatlar]
-        sahte_tarif = [f"{koordinatlar[idx]['id']} noktasından {koordinatlar[idx + 1]['id']} noktasına doğru ilerleyin."
-                       for idx in range(len(koordinatlar) - 1)]
-        return duz_geometri, sahte_tarif
+        url = f"https://router.project-osrm.org/route/v1/driving/{k_str}?overview=full&geometries=geojson"
+        try:
+            res = requests.get(url, timeout=5).json()
+            if res["code"] == "Ok":
+                return [[c[1], c[0]] for c in res["routes"][0]["geometry"]["coordinates"]]
+        except:
+            pass
+        return [[n["lat"], n["lon"]] for n in koordinatlar]
 
     # --- Sürücü Kapasiteli Akıllı Kümeleme ---
     kalan_kapasiteler = {d_id: suruculer[d_id]["kapasite"] for d_id in suruculer.keys()}
@@ -166,7 +105,7 @@ def vrp_motoru_calistir(excel_yolu):
         else:
             break
 
-    # En Yakın Komşu (Nearest Neighbor) ile Başlangıç Rotaları
+    # En Yakın Komşu ile Başlangıç Rotaları
     baslangic_rotalar = {}
     for d_id, m_listesi in musteri_kumeleri.items():
         sirali_rota = [d_id]
@@ -178,7 +117,7 @@ def vrp_motoru_calistir(excel_yolu):
         sirali_rota.append("MERKEZ")
         baslangic_rotalar[d_id] = sirali_rota
 
-    # --- Gerçek Yol Bazlı ALNS Optimizasyonu ---
+    # --- ALNS Optimizasyonu ---
     en_iyi_alns_rotasi = {k: list(v) for k, v in baslangic_rotalar.items()}
     for _ in range(200):
         test_rotalar = {k: list(v) for k, v in en_iyi_alns_rotasi.items()}
@@ -201,7 +140,7 @@ def vrp_motoru_calistir(excel_yolu):
         if filo_gercek_maliyeti(test_rotalar) < filo_gercek_maliyeti(en_iyi_alns_rotasi):
             en_iyi_alns_rotasi = {k: list(v) for k, v in test_rotalar.items()}
 
-    # --- Gerçek Yol Bazlı 2-Opt İyileştirmesi ---
+    # --- 2-Opt İyileştirmesi ---
     def nihai_iki_opt_gercek(rota):
         en_iyi = list(rota)
         iyilesme = True
@@ -234,8 +173,8 @@ def vrp_motoru_calistir(excel_yolu):
         m_listesi = nihai_optimize_rotalar[d_id][1:-1]
         kapasite = suruculer[d_id]["kapasite"]
 
-        # Geometri ve adım adım rota tarifini OSRM havuzundan çekiyoruz
-        geometri, tarif = osrm_geometri_ve_tarif_getir(nihai_optimize_rotalar[d_id])
+        # Gerçek kıvrımlı karayolu geometrisini alıyoruz
+        geometri = osrm_geometri_getir(nihai_optimize_rotalar[d_id])
 
         arac_detaylari.append({
             "id": d_id,
@@ -245,8 +184,7 @@ def vrp_motoru_calistir(excel_yolu):
             "eski_km": round(km_eski, 2),
             "yeni_km": round(km_yeni, 2),
             "tasarruf": round(max(0, km_eski - km_yeni), 2),
-            "musteriler": m_listesi,
-            "guzergah_tarifi": tarif
+            "musteriler": m_listesi
         })
 
         renk = suruculer[d_id]["renk"]
@@ -294,7 +232,7 @@ def index():
                 araclar, ozet, harita_html = vrp_motoru_calistir(file)
                 return render_template('dashboard.html', araclar=araclar, ozet=ozet, harita_html=harita_html)
             except Exception as e:
-                return f"Algoritma Çalışırken Sunucu Hatası Oluştu: {str(e)}", 500
+                return f"Algoritma Hatası: {str(e)}", 500
 
     return render_template('index.html')
 
