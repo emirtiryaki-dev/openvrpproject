@@ -77,29 +77,54 @@ def vrp_motoru_calistir(excel_yolu):
     # Haritaya yol çizgisini ve detaylı Türkçe güzergah adımlarını getiren yeni fonksiyon
     def osrm_geometri_ve_tarif_getir(rota_id_listesi):
         koordinatlar = [tum_noktalar[nid] for nid in rota_id_listesi]
-        k_str = ";".join([f"{n['lon']},{n['lat']}" for n in koordinatlar])
 
-        # steps=true ve language=tr parametreleriyle canlı navigasyon verilerini çekiyoruz
+        # Önce tüm rotayı tek seferde çekmeyi deniyoruz
+        k_str = ";".join([f"{n['lon']},{n['lat']}" for n in koordinatlar])
         url = f"https://router.project-osrm.org/route/v1/driving/{k_str}?overview=full&geometries=geojson&steps=true&language=tr"
 
-        yol_tarifi_adimlari = []
         try:
-            res = requests.get(url).json()
+            res = requests.get(url, timeout=5).json()
             if res["code"] == "Ok":
                 geometri = [[c[1], c[0]] for c in res["routes"][0]["geometry"]["coordinates"]]
-
-                # OSRM rotasındaki her bacağı (leg) ve manevra adımını (step) ayıklıyoruz
+                yol_tarifi_adimlari = []
                 legs = res["routes"][0]["legs"]
                 for leg in legs:
                     for step in leg["steps"]:
                         manevra = step["maneuver"]["instruction"]
                         if manevra:
                             yol_tarifi_adimlari.append(manevra)
-
                 return geometri, yol_tarifi_adimlari
         except:
             pass
-        return None, ["Güzergah tarifi şu an harita sunucusundan alınamadı."]
+
+        # YUKARISI HATA VERİRSE: Noktaları ikişerli (parça parça) çekerek rotayı garanti altına alıyoruz
+        toplam_geometri = []
+        toplam_tarif = []
+
+        for i in range(len(koordinatlar) - 1):
+            n1 = koordinatlar[i]
+            n2 = koordinatlar[i + 1]
+            parca_url = f"https://router.project-osrm.org/route/v1/driving/{n1['lon']},{n1['lat']};{n2['lon']},{n2['lat']}?overview=full&geometries=geojson&steps=true&language=tr"
+            try:
+                res = requests.get(parca_url, timeout=3).json()
+                if res["code"] == "Ok":
+                    coords = [[c[1], c[0]] for c in res["routes"][0]["geometry"]["coordinates"]]
+                    toplam_geometri.extend(coords)
+
+                    legs = res["routes"][0]["legs"]
+                    for leg in legs:
+                        for step in leg["steps"]:
+                            manevra = step["maneuver"]["instruction"]
+                            if manevra:
+                                toplam_tarif.append(manevra)
+            except:
+                continue
+
+        if toplam_geometri:
+            return toplam_geometri, toplam_tarif
+
+        return None, [
+            "Güzergah tarifi şu an harita sunucusunun yoğunluğu nedeniyle alınamadı. Lütfen az sonra tekrar deneyin."]
 
     # --- Sürücü Kapasiteli Akıllı Kümeleme ---
     kalan_kapasiteler = {d_id: suruculer[d_id]["kapasite"] for d_id in suruculer.keys()}
