@@ -129,7 +129,35 @@
                         {% endfor %}
                     </span>
                 </div>
-            </div>
+
+                <div class="accordion mt-3" id="accordionGuzergah{{ arac.id }}">
+                    <div class="accordion-item" style="border: 1px solid #eef2f5; border-radius: 8px; overflow: hidden;">
+                        <h2 class="accordion-header" id="heading{{ arac.id }}">
+                            <button class="accordion-button collapsed py-2 px-3 bg-white text-primary fw-semibold"
+                                    type="button"
+                                    data-bs-toggle="collapse"
+                                    data-bs-target="#collapse{{ arac.id }}"
+                                    aria-expanded="false"
+                                    aria-controls="collapse{{ arac.id }}"
+                                    style="font-size: 0.82rem; box-shadow: none;">
+                                <i class="fa-solid fa-map-location-dot me-2 text-primary"></i> Canlı Güzergah Tarifini Göster
+                            </button>
+                        </h2>
+                        <div id="collapse{{ arac.id }}" class="accordion-collapse collapse" aria-labelledby="heading{{ arac.id }}" data-bs-parent="#accordionGuzergah{{ arac.id }}">
+                            <div class="accordion-body bg-light p-2 border-top" style="max-height: 220px; overflow-y: auto; font-size: 0.78rem; line-height: 1.4;">
+                                <div class="list-group list-group-flush">
+                                    {% for adim in arac.guzergah_tarifi %}
+                                        <div class="list-group-item bg-transparent py-2 px-1 border-0 border-bottom text-dark d-flex align-items-start">
+                                            <span class="badge bg-secondary me-2 mt-0.5" style="font-size: 0.65rem; padding: 4px 6px;">{{ loop.index }}</span>
+                                            <div class="text-secondary" style="font-weight: 500;">{{ adim }}</div>
+                                        </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                </div>
             {% endfor %}
         </div>
 

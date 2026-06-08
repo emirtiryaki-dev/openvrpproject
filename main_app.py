@@ -10,7 +10,7 @@ app = Flask(__name__)
 
 
 # ========================================================
-# 1. EN GELİŞMİŞ ALGORİTMA MOTORU (Gerçek Yol Matrisi Destekli)
+# 1. EN GELİŞMİŞ ALGORİTMA MOTORU (Gerçek Yol Matrisi & Navigasyon Destekli)
 # ========================================================
 def vrp_motoru_calistir(excel_yolu):
     random.seed(42)
@@ -43,10 +43,8 @@ def vrp_motoru_calistir(excel_yolu):
     nokta_idleri = list(tum_noktalar.keys())
 
     # --- OSRM ÜZERİNDEN GERÇEK YOL MESAFE MATRİSİNİ OLUŞTURMA ---
-    # Bu adım kuş uçuşu sapmaları (Mor rotadaki gibi hataları) tamamen engeller.
     mesafe_matrisi = {id1: {id2: 0.0 for id2 in nokta_idleri} for id1 in nokta_idleri}
 
-    # OSRM Table API kullanarak tek seferde tüm noktaların birbirine sürüş mesafesini çekiyoruz
     koordinat_stringi = ";".join([f"{tum_noktalar[nid]['lon']},{tum_noktalar[nid]['lat']}" for nid in nokta_idleri])
     url = f"https://router.project-osrm.org/table/v1/driving/{koordinat_stringi}?annotations=distance"
 
@@ -56,10 +54,8 @@ def vrp_motoru_calistir(excel_yolu):
             matris_listesi = res["distances"]
             for i, id1 in enumerate(nokta_idleri):
                 for j, id2 in enumerate(nokta_idleri):
-                    # OSRM metre döner, biz kilometreye çeviriyoruz
                     mesafe_matrisi[id1][id2] = round(matris_listesi[i][j] / 1000, 2)
     except Exception as e:
-        # Eğer OSRM Table API'de anlık bir kesinti olursa güvenlik önlemi olarak Haversine'a döner
         def haversine(k1, k2):
             R = 6371.0
             lat1, lon1 = math.radians(k1["lat"]), math.radians(k1["lon"])
@@ -78,25 +74,38 @@ def vrp_motoru_calistir(excel_yolu):
     def filo_gercek_maliyeti(rotalar_dict):
         return sum(rota_gercek_maliyeti(r) for r in rotalar_dict.values())
 
-    # Haritaya yol çizgisini (Geometriyi) getiren fonksiyon
-    def osrm_geometri_getir(rota_id_listesi):
+    # Haritaya yol çizgisini ve detaylı Türkçe güzergah adımlarını getiren yeni fonksiyon
+    def osrm_geometri_ve_tarif_getir(rota_id_listesi):
         koordinatlar = [tum_noktalar[nid] for nid in rota_id_listesi]
         k_str = ";".join([f"{n['lon']},{n['lat']}" for n in koordinatlar])
-        url = f"https://router.project-osrm.org/route/v1/driving/{k_str}?overview=full&geometries=geojson"
+
+        # steps=true ve language=tr parametreleriyle canlı navigasyon verilerini çekiyoruz
+        url = f"https://router.project-osrm.org/route/v1/driving/{k_str}?overview=full&geometries=geojson&steps=true&language=tr"
+
+        yol_tarifi_adimlari = []
         try:
             res = requests.get(url).json()
             if res["code"] == "Ok":
-                return [[c[1], c[0]] for c in res["routes"][0]["geometry"]["coordinates"]]
+                geometri = [[c[1], c[0]] for c in res["routes"][0]["geometry"]["coordinates"]]
+
+                # OSRM rotasındaki her bacağı (leg) ve manevra adımını (step) ayıklıyoruz
+                legs = res["routes"][0]["legs"]
+                for leg in legs:
+                    for step in leg["steps"]:
+                        manevra = step["maneuver"]["instruction"]
+                        if manevra:
+                            yol_tarifi_adimlari.append(manevra)
+
+                return geometri, yol_tarifi_adimlari
         except:
             pass
-        return None
+        return None, ["Güzergah tarifi şu an harita sunucusundan alınamadı."]
 
     # --- Sürücü Kapasiteli Akıllı Kümeleme ---
     kalan_kapasiteler = {d_id: suruculer[d_id]["kapasite"] for d_id in suruculer.keys()}
     musteri_kumeleri = {d_id: [] for d_id in suruculer.keys()}
     atanmamis_musteriler = list(musteriler.keys())
 
-    # Gerçek karayolu mesafelerine göre en mantıklı en yakın araca atama yapılıyor
     while atanmamis_musteriler:
         en_yakin_m, en_yakin_d, en_kisa_yol = None, None, float('inf')
         for m_id in atanmamis_musteriler:
@@ -126,7 +135,7 @@ def vrp_motoru_calistir(excel_yolu):
 
     # --- Gerçek Yol Bazlı ALNS Optimizasyonu ---
     en_iyi_alns_rotasi = {k: list(v) for k, v in baslangic_rotalar.items()}
-    for _ in range(200):  # İyileştirme adım sayısını artırdık
+    for _ in range(200):
         test_rotalar = {k: list(v) for k, v in en_iyi_alns_rotasi.items()}
         sokulenler = random.sample(list(musteriler.keys()), min(3, len(musteriler)))
         for s_id in test_rotalar.keys():
@@ -180,6 +189,9 @@ def vrp_motoru_calistir(excel_yolu):
         m_listesi = nihai_optimize_rotalar[d_id][1:-1]
         kapasite = suruculer[d_id]["kapasite"]
 
+        # Geometri ve adım adım rota tarifini OSRM'den çekiyoruz
+        geometri, tarif = osrm_geometri_ve_tarif_getir(nihai_optimize_rotalar[d_id])
+
         arac_detaylari.append({
             "id": d_id,
             "sofor": suruculer[d_id]["ad"],
@@ -188,7 +200,8 @@ def vrp_motoru_calistir(excel_yolu):
             "eski_km": round(km_eski, 2),
             "yeni_km": round(km_yeni, 2),
             "tasarruf": round(max(0, km_eski - km_yeni), 2),
-            "musteriler": m_listesi
+            "musteriler": m_listesi,
+            "guzergah_tarifi": tarif  # HTML sayfasına gönderilen yol tarifi listesi
         })
 
         renk = suruculer[d_id]["renk"]
@@ -200,7 +213,6 @@ def vrp_motoru_calistir(excel_yolu):
             folium.Marker([musteriler[m_id]["lat"], musteriler[m_id]["lon"]], popup=f"<b>{m_id}</b><br>Sıra: {idx}",
                           icon=folium.Icon(color=renk, icon="user", prefix="fa")).add_to(katman)
 
-        geometri = osrm_geometri_getir(nihai_optimize_rotalar[d_id])
         if geometri:
             folium.GeoJson(data={"type": "Feature",
                                  "geometry": {"type": "LineString", "coordinates": [[c[1], c[0]] for c in geometri]}},
